@@ -1,0 +1,835 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-1.2.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.2.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.2.0.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-1.2.0.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.msg_handler(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      var msg = msg.metadata;
+      var comm_id = msg.comm_id;
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg.traceback)
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.msg_handler = function(msg) {
+  var metadata = msg.metadata;
+  if ((metadata.msg_type == "Ready")) {
+    if (metadata.content) {
+      console.log("Python callback returned following output:", metadata.content);
+    }
+	return;
+  } else if (metadata.msg_type == "Error") {
+    console.log("Python failed with the following traceback:", metadata.traceback)
+    return
+  }
+  this.process_msg(msg)
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(frame);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.wait = true;
+    this.dynamic_update(frame)
+  } else {
+    this.update(frame)
+  }
+}
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+  window.PyViz = window.HoloViews
+} else if (window.PyViz === undefined) {
+  window.PyViz = window.HoloViews
+}
+
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        window.PyViz.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.PyViz.comms) {
+        return window.PyViz.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in window.PyViz.kernels) && (window.PyViz.kernels[plot_id])) {
+        var comm = window.PyViz.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+
+      window.PyViz.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.PyViz.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-1.2.0.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-widgets-1.2.0.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-tables-1.2.0.min.css">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+
+
+
+
+
+  <div class="bk-root" id="08aa22f4-faf0-4a85-ae62-06765d46b921" data-root-id="5254"></div>
+
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"59c16f2e-199d-468a-ae6f-ce15880f3783":{"roots":{"references":[{"attributes":{"background_fill_color":{"value":"white"},"below":[{"id":"5263","type":"LinearAxis"}],"center":[{"id":"5267","type":"Grid"},{"id":"5272","type":"Grid"}],"left":[{"id":"5268","type":"LinearAxis"}],"margin":null,"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":800,"renderers":[{"id":"5304","type":"GraphRenderer"},{"id":"5324","type":"GlyphRenderer"}],"sizing_mode":"fixed","title":{"id":"5255","type":"Title"},"toolbar":{"id":"5279","type":"Toolbar"},"x_range":{"id":"5251","type":"Range1d"},"x_scale":{"id":"5259","type":"LinearScale"},"y_range":{"id":"5252","type":"Range1d"},"y_scale":{"id":"5261","type":"LinearScale"}},"id":"5254","subtype":"Figure","type":"Plot"},{"attributes":{},"id":"5269","type":"BasicTicker"},{"attributes":{},"id":"5275","type":"WheelZoomTool"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"5334","type":"BoxAnnotation"},{"attributes":{},"id":"5274","type":"PanTool"},{"attributes":{"line_alpha":{"value":0.2},"line_width":{"field":"edge_line_width"}},"id":"5300","type":"MultiLine"},{"attributes":{"graph_layout":{"0":[-0.7380976151934135,1.0161630698850423],"1":[0.5401413253844175,-0.19949175866933092],"10":[0.35027707426858146,-0.8432177766397219],"11":[-0.61907616627666,0.8911251861381962],"2":[-0.5020720047576404,0.962754532102756],"3":[0.26914225353235666,-0.18592327557597726],"4":[-0.42475088572722197,0.7207756058126742],"5":[-0.034585577454744366,-0.6859485117229939],"6":[0.5547245406031959,-0.6497156563601942],"7":[-0.552431631386739,1.069314652057865],"8":[0.8061280286048148,-0.09583606702831395],"9":[0.3506006584030541,-2.0]}},"id":"5293","type":"StaticLayoutProvider"},{"attributes":{"callback":null,"data":{"text":["1","3201","3201","41","431","431","61","61","801","851","881","881"],"x":{"__ndarray__":"mlzQ436e57850Pd11kjhP6Z6FU/5EOC/ZCo5bqA50T8UT8lWHi/bv4WtKWgztaG/Pb0Frk3A4T+Cn8IZha3hv2nk5wHNy+k/FAVzvj1w1j9saqGI8GrWP6KF/NF4z+O/","dtype":"float64","shape":[12]},"y":{"__ndarray__":"kPIINTRC8D/dNKcp8ojJv7igrpfizu4/iv4UelXMx79uCtcAmBDnP1viEktK8+W/yIT4fHjK5L/sjTuu6RvxP4nzqWW2iLi/AAAAAAAAAMCbWcLYo/vqv/lfY/cYhOw/","dtype":"float64","shape":[12]}},"selected":{"id":"5320","type":"Selection"},"selection_policy":{"id":"5331","type":"UnionRenderers"}},"id":"5319","type":"ColumnDataSource"},{"attributes":{"fill_color":{"value":"limegreen"},"size":{"units":"screen","value":10}},"id":"5296","type":"Circle"},{"attributes":{},"id":"5335","type":"UnionRenderers"},{"attributes":{"callback":null,"end":0.9605505929846376,"reset_end":0.9605505929846376,"reset_start":-0.8925201795732364,"start":-0.8925201795732364,"tags":[[["x","x",null]]]},"id":"5251","type":"Range1d"},{"attributes":{"source":{"id":"5292","type":"ColumnDataSource"}},"id":"5303","type":"CDSView"},{"attributes":{},"id":"5336","type":"Selection"},{"attributes":{},"id":"5277","type":"ResetTool"},{"attributes":{},"id":"5337","type":"UnionRenderers"},{"attributes":{"overlay":{"id":"5333","type":"BoxAnnotation"}},"id":"5276","type":"BoxZoomTool"},{"attributes":{"range":null,"value":0.05},"id":"5318","type":"Dodge"},{"attributes":{"line_color":{"value":"limegreen"},"line_width":{"field":"edge_line_width"}},"id":"5301","type":"MultiLine"},{"attributes":{},"id":"5338","type":"Selection"},{"attributes":{},"id":"5315","type":"NodesAndLinkedEdges"},{"attributes":{},"id":"5313","type":"NodesAndLinkedEdges"},{"attributes":{},"id":"5289","type":"BasicTickFormatter"},{"attributes":{"fill_color":{"value":"blue"},"size":{"units":"screen","value":10}},"id":"5294","type":"Circle"},{"attributes":{"callback":null,"overlay":{"id":"5334","type":"BoxAnnotation"}},"id":"5278","type":"BoxSelectTool"},{"attributes":{"line_width":{"field":"edge_line_width"}},"id":"5299","type":"MultiLine"},{"attributes":{"range":null,"value":-0.05},"id":"5317","type":"Dodge"},{"attributes":{"source":{"id":"5291","type":"ColumnDataSource"}},"id":"5298","type":"CDSView"},{"attributes":{"data_source":{"id":"5291","type":"ColumnDataSource"},"glyph":{"id":"5294","type":"Circle"},"hover_glyph":{"id":"5296","type":"Circle"},"muted_glyph":null,"nonselection_glyph":{"id":"5295","type":"Circle"},"selection_glyph":null,"view":{"id":"5298","type":"CDSView"}},"id":"5297","type":"GlyphRenderer"},{"attributes":{},"id":"5320","type":"Selection"},{"attributes":{},"id":"5287","type":"BasicTickFormatter"},{"attributes":{"text":"","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"5255","type":"Title"},{"attributes":{"callback":null,"end":1.3762461172636513,"reset_end":1.3762461172636513,"reset_start":-2.3069314652057864,"start":-2.3069314652057864,"tags":[[["y","y",null]]]},"id":"5252","type":"Range1d"},{"attributes":{},"id":"5259","type":"LinearScale"},{"attributes":{"text_align":"center","text_baseline":"middle","text_color":{"value":"black"},"text_font_size":{"value":"10pt"},"x":{"field":"x","transform":{"id":"5317","type":"Dodge"}},"y":{"field":"y","transform":{"id":"5318","type":"Dodge"}}},"id":"5322","type":"Text"},{"attributes":{"callback":null,"renderers":[{"id":"5304","type":"GraphRenderer"}],"tags":["hv_created"],"tooltips":[["index","@{index_hover}"]]},"id":"5253","type":"HoverTool"},{"attributes":{},"id":"5261","type":"LinearScale"},{"attributes":{"text_align":"center","text_alpha":{"value":0.1},"text_baseline":"middle","text_color":{"value":"black"},"text_font_size":{"value":"10pt"},"x":{"field":"x","transform":{"id":"5317","type":"Dodge"}},"y":{"field":"y","transform":{"id":"5318","type":"Dodge"}}},"id":"5323","type":"Text"},{"attributes":{},"id":"5273","type":"SaveTool"},{"attributes":{"callback":null,"data":{"edge_line_width":{"__ndarray__":"5+F3hlmxyT92qgYMtNAQQEzKHZKLtPc/ceUhf7h5B0BJAYFfRZISQJZSdWfSpcw/eTxAcUAV3z+7S6hMihbwP1Ob07fk4/M/sHgznAzaBEAhJTPD5mgGQDFK2qbQMyJAOMscJOLhKEDHEi+cKaLtP0IdFcdMv80/UN22PKp/5T8F3hEwCtP0P/mhGfy2cSVACrca2XfACUBR3EiT14zSPz8cxOX6pBFAYEWShqsA1T912MV0B9YeQP9EELm8m8s/lInYNIyDyz/ZNIyDm5TOPyS3bChzrdA/8rcZa87t5j+TnfxQ/hnLP2gefmeYFds/ElfkYYbqyT/kf7wURX8AQL7eT1vpTRVADBnWSozyEkD+XT1cyxf7PzogfItFcA1Ay60MZhy/3D+0Zs4Kv1DkP1Uv6W8WDsw/bLC3zCRazT/+Z09qBOPKP4JUxdp67c0/DI32Te6t9D8eZxZIrATgP4O0wcFqEtA/jNXqjwvDA0CKMyjs1toSQBrRQQVWzRhAs7tnAiSQJECrSNJwFaASQA==","dtype":"float64","shape":[50]},"end":{"__ndarray__":"AAAAAAIAAAAEAAAABwAAAAsAAAABAAAABgAAAAoAAAAAAAAAAgAAAAQAAAAHAAAACwAAAAEAAAAGAAAACgAAAAAAAAACAAAABAAAAAYAAAAHAAAACgAAAAsAAAABAAAABQAAAAYAAAAJAAAACgAAAAsAAAAJAAAACgAAAAAAAAACAAAABAAAAAcAAAALAAAAAQAAAAMAAAAGAAAACgAAAAEAAAAFAAAABgAAAAkAAAAKAAAAAAAAAAIAAAAEAAAABwAAAAsAAAA=","dtype":"int32","shape":[50]},"start":{"__ndarray__":"AAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAQAAAAEAAAACAAAAAgAAAAIAAAACAAAAAgAAAAMAAAADAAAAAwAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAFAAAABQAAAAUAAAAFAAAABQAAAAUAAAAGAAAABgAAAAcAAAAHAAAABwAAAAcAAAAHAAAACAAAAAgAAAAIAAAACAAAAAoAAAAKAAAACgAAAAoAAAAKAAAACwAAAAsAAAALAAAACwAAAAsAAAA=","dtype":"int32","shape":[50]},"xs":[{"__ndarray__":"mlzQ436e57+aXNDjfp7nvwAAAAAAAPh/C6hVoZSm6b+aXNDjfp7nvwuoVaGUpum/","dtype":"float64","shape":[6]},{"__ndarray__":"mlzQ436e57+mehVP+RDgvwAAAAAAAPh/VEn6fMc74r+mehVP+RDgv3at4Viw3OG/","dtype":"float64","shape":[6]},{"__ndarray__":"mlzQ436e578UT8lWHi/bvwAAAAAAAPh/rtd3ropL378UT8lWHi/bv5g1/z51/Ny/","dtype":"float64","shape":[6]},{"__ndarray__":"mlzQ436e57+Cn8IZha3hvwAAAAAAAPh/ysSW9jpm47+Cn8IZha3hv/2p/jXP3OO/","dtype":"float64","shape":[6]},{"__ndarray__":"mlzQ436e57+ihfzReM/jvwAAAAAAAPh/TJ7yBhfS5b+ihfzReM/jv9KgCAkEmuS/","dtype":"float64","shape":[6]},{"__ndarray__":"OdD3ddZI4T850Pd11kjhPwAAAAAAAPh/kAnlcIGB3j850Pd11kjhP5AJ5XCBgd4/","dtype":"float64","shape":[6]},{"__ndarray__":"OdD3ddZI4T89vQWuTcDhPwAAAAAAAPh/uK+/IifY4D89vQWuTcDhP6lTj4zHhuI/","dtype":"float64","shape":[6]},{"__ndarray__":"OdD3ddZI4T9saqGI8GrWPwAAAAAAAPh/p43F1fLz1T9saqGI8GrWPwsRl/lzLtk/","dtype":"float64","shape":[6]},{"__ndarray__":"pnoVT/kQ4L+aXNDjfp7nvwAAAAAAAPh/7I3rtbBz5b+aXNDjfp7nv8opBNrH0uW/","dtype":"float64","shape":[6]},{"__ndarray__":"pnoVT/kQ4L+mehVP+RDgvwAAAAAAAPh/F8aaDA8Z4r+mehVP+RDgvxfGmgwPGeK/","dtype":"float64","shape":[6]},{"__ndarray__":"pnoVT/kQ4L8UT8lWHi/bvwAAAAAAAPh/cvFhRCEG3r8UT8lWHi/bv7AQK6BP0dq/","dtype":"float64","shape":[6]},{"__ndarray__":"pnoVT/kQ4L+Cn8IZha3hvwAAAAAAAPh/iZ541IYM4L+Cn8IZha3hvxFxJ40RkuG/","dtype":"float64","shape":[6]},{"__ndarray__":"pnoVT/kQ4L+ihfzReM/jvwAAAAAAAPh/xhtLy2KE4r+ihfzReM/jv3xVb5Jto+G/","dtype":"float64","shape":[6]},{"__ndarray__":"ZCo5bqA50T850Pd11kjhPwAAAAAAAPh/lLw3CUNt3j850Pd11kjhP6wNzB9amN4/","dtype":"float64","shape":[6]},{"__ndarray__":"ZCo5bqA50T89vQWuTcDhPwAAAAAAAPh/WJHUI1fw3z89vQWuTcDhP1j49HUMZ+E/","dtype":"float64","shape":[6]},{"__ndarray__":"ZCo5bqA50T9saqGI8GrWPwAAAAAAAPh/rcm6U+c/1D9saqGI8GrWP6UOmycel9c/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v27+aXNDjfp7nvwAAAAAAAPh/TRj5t0iQ5b+aXNDjfp7nv1hptW/Tt+a/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v27+mehVP+RDgvwAAAAAAAPh/7lKSsO9K3b+mehVP+RDgv9iZZKrgP+C/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v278UT8lWHi/bvwAAAAAAAPh/9uXT0Uk/378UT8lWHi/bv/bl09FJP9+/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v2789vQWuTcDhPwAAAAAAAPh/2rr4HEPF3z89vQWuTcDhP0N/DckpQeE/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v27+Cn8IZha3hvwAAAAAAAPh/VsXnl1cw4L+Cn8IZha3hvyUNKzbnxOG/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v279saqGI8GrWPwAAAAAAAPh/BN1f8Qgb0z9saqGI8GrWPx5SwnAjH9Y/","dtype":"float64","shape":[6]},{"__ndarray__":"FE/JVh4v27+ihfzReM/jvwAAAAAAAPh/fXrn6F+64b+ihfzReM/jv2veoOhj1uK/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob850Pd11kjhPwAAAAAAAPh/SEj4bApH4D850Pd11kjhP6C7iMdeYd4/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob+FrSloM7WhvwAAAAAAAPh/TDI/oEcbub+FrSloM7Whv0wyP6BHG7m/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob89vQWuTcDhPwAAAAAAAPh/EDesgNaM3z89vQWuTcDhPwYMXwX1V98/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob8UBXO+PXDWPwAAAAAAAPh/ykrThDGu0z8UBXO+PXDWP9m2irsa6dY/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob9saqGI8GrWPwAAAAAAAPh/Bz8RphQF0j9saqGI8GrWP7IPB18KS9M/","dtype":"float64","shape":[6]},{"__ndarray__":"ha0paDO1ob+ihfzReM/jvwAAAAAAAPh/dvdF1btQ4r+ihfzReM/jv6HviIu75OO/","dtype":"float64","shape":[6]},{"__ndarray__":"Pb0Frk3A4T8UBXO+PXDWPwAAAAAAAPh/PCeFv7Rh1T8UBXO+PXDWPzW1zf26tdg/","dtype":"float64","shape":[6]},{"__ndarray__":"Pb0Frk3A4T9saqGI8GrWPwAAAAAAAPh/0JTGQDo22D9saqGI8GrWP2JFwuKPhto/","dtype":"float64","shape":[6]},{"__ndarray__":"gp/CGYWt4b+aXNDjfp7nvwAAAAAAAPh/Ujf8Bsnl5b+aXNDjfp7nvx9SlMc0b+W/","dtype":"float64","shape":[6]},{"__ndarray__":"gp/CGYWt4b+mehVP+RDgvwAAAAAAAPh/n3tflPex4b+mehVP+RDgvxepsNtsLOC/","dtype":"float64","shape":[6]},{"__ndarray__":"gp/CGYWt4b8UT8lWHi/bvwAAAAAAAPh/awN/Wnkp3r8UT8lWHi/bv85z+B1aANu/","dtype":"float64","shape":[6]},{"__ndarray__":"gp/CGYWt4b+Cn8IZha3hvwAAAAAAAPh/8+pH15q147+Cn8IZha3hv/PqR9eateO/","dtype":"float64","shape":[6]},{"__ndarray__":"gp/CGYWt4b+ihfzReM/jvwAAAAAAAPh/2gWsew7j47+ihfzReM/jv9u3Lm2BT+K/","dtype":"float64","shape":[6]},{"__ndarray__":"aeTnAc3L6T850Pd11kjhPwAAAAAAAPh/vIS+JzTf4j850Pd11kjhPyRKpfWle+M/","dtype":"float64","shape":[6]},{"__ndarray__":"aeTnAc3L6T9kKjluoDnRPwAAAAAAAPh/l3300Sz01D9kKjluoDnRPw8hxgq/gtU/","dtype":"float64","shape":[6]},{"__ndarray__":"aeTnAc3L6T89vQWuTcDhPwAAAAAAAPh/Omu9nxjT4T89vQWuTcDhP+MQPwJtW+M/","dtype":"float64","shape":[6]},{"__ndarray__":"aeTnAc3L6T9saqGI8GrWPwAAAAAAAPh/hV5ps70Y1z9saqGI8GrWP6BzlYFn+Nk/","dtype":"float64","shape":[6]},{"__ndarray__":"bGqhiPBq1j850Pd11kjhPwAAAAAAAPh/nL5lT1WE4T850Pd11kjhP9P5+Xopzt8/","dtype":"float64","shape":[6]},{"__ndarray__":"bGqhiPBq1j+FrSloM7WhvwAAAAAAAPh/o61XrKt5oT+FrSloM7WhvyyhpJL3J40/","dtype":"float64","shape":[6]},{"__ndarray__":"bGqhiPBq1j89vQWuTcDhPwAAAAAAAPh/Cyjz0aja4D89vQWuTcDhP4Sf6gH8ZN8/","dtype":"float64","shape":[6]},{"__ndarray__":"bGqhiPBq1j8UBXO+PXDWPwAAAAAAAPh/kBRCCBnB1D8UBXO+PXDWPwHEWnvNHtg/","dtype":"float64","shape":[6]},{"__ndarray__":"bGqhiPBq1j9saqGI8GrWPwAAAAAAAPh/itOWDcVa0j9saqGI8GrWP4rTlg3FWtI/","dtype":"float64","shape":[6]},{"__ndarray__":"ooX80XjP47+aXNDjfp7nvwAAAAAAAPh/8EParuCb5b+aXNDjfp7nv2pBxKzz0+a/","dtype":"float64","shape":[6]},{"__ndarray__":"ooX80XjP47+mehVP+RDgvwAAAAAAAPh/guTGVQ9c4b+mehVP+RDgv8yqoo4EPeK/","dtype":"float64","shape":[6]},{"__ndarray__":"ooX80XjP478UT8lWHi/bvwAAAAAAAPh/XmXzKFBZ378UT8lWHi/bv4GdgClIId2/","dtype":"float64","shape":[6]},{"__ndarray__":"ooX80XjP47+Cn8IZha3hvwAAAAAAAPh/Sh8TcO+Z4b+Cn8IZha3hv0ltkH58LeO/","dtype":"float64","shape":[6]},{"__ndarray__":"ooX80XjP47+ihfzReM/jvwAAAAAAAPh/E9GBj47X5b+ihfzReM/jvxPRgY+O1+W/","dtype":"float64","shape":[6]}],"ys":[{"__ndarray__":"kPIINTRC8D+Q8gg1NELwPwAAAAAAAPh/AlK+TPus7z+Q8gg1NELwPx+8ssPqrfA/","dtype":"float64","shape":[6]},{"__ndarray__":"kPIINTRC8D+4oK6X4s7uPwAAAAAAAPh/OjiIKo5v7j+4oK6X4s7uP9AOr0fkCfA/","dtype":"float64","shape":[6]},{"__ndarray__":"kPIINTRC8D9uCtcAmBDnPwAAAAAAAPh/42jdzpbY5z9uCtcAmBDnP4NgPIAZEuk/","dtype":"float64","shape":[6]},{"__ndarray__":"kPIINTRC8D/sjTuu6RvxPwAAAAAAAPh/wdUxZsps8D/sjTuu6RvxP1sVxbrlO/E/","dtype":"float64","shape":[6]},{"__ndarray__":"kPIINTRC8D/5X2P3GITsPwAAAAAAAPh/dRhSe0Zo7T/5X2P3GITsP4Q79l1Vke4/","dtype":"float64","shape":[6]},{"__ndarray__":"3TSnKfKIyb/dNKcp8ojJvwAAAAAAAPh/VIH1nqbmzL/dNKcp8ojJv2boWLQ9K8a/","dtype":"float64","shape":[6]},{"__ndarray__":"3TSnKfKIyb/IhPh8eMrkvwAAAAAAAPh/yP8Y8KHJ4r/IhPh8eMrkvxwUMiOvu+K/","dtype":"float64","shape":[6]},{"__ndarray__":"3TSnKfKIyb+bWcLYo/vqvwAAAAAAAPh/mY5DYtvL6L+bWcLYo/vqv09O0HO+Rem/","dtype":"float64","shape":[6]},{"__ndarray__":"uKCul+LO7j+Q8gg1NELwPwAAAAAAAPh/zyaca95x8D+Q8gg1NELwPzhoYnKCP+8/","dtype":"float64","shape":[6]},{"__ndarray__":"uKCul+LO7j+4oK6X4s7uPwAAAAAAAPh/mg1benX37T+4oK6X4s7uP9YzArVPpu8/","dtype":"float64","shape":[6]},{"__ndarray__":"uKCul+LO7j9uCtcAmBDnPwAAAAAAAPh/SVsab26+6D9uCtcAmBDnP4Ut2nySQek/","dtype":"float64","shape":[6]},{"__ndarray__":"uKCul+LO7j/sjTuu6RvxPwAAAAAAAPh/+rjixdNe8D/sjTuu6RvxP963bJ3HAvA/","dtype":"float64","shape":[6]},{"__ndarray__":"uKCul+LO7j/5X2P3GITsPwAAAAAAAPh/Mr1oWWBL7j/5X2P3GITsPxc5t0Pq2+w/","dtype":"float64","shape":[6]},{"__ndarray__":"iv4UelXMx7/dNKcp8ojJvwAAAAAAAPh/WFuZPIt9zL/dNKcp8ojJvzjlgEhKxMW/","dtype":"float64","shape":[6]},{"__ndarray__":"iv4UelXMx7/IhPh8eMrkvwAAAAAAAPh/0ZXEDZCA47/IhPh8eMrkv56cj9WnnuK/","dtype":"float64","shape":[6]},{"__ndarray__":"iv4UelXMx7+bWcLYo/vqvwAAAAAAAPh/PswFL90R6b+bWcLYo/vqv3I2b8sU3ei/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z+Q8gg1NELwPwAAAAAAAPh/q4YLnGm87z+Q8gg1NELwPwuPrOrmgu4/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z+4oK6X4s7uPwAAAAAAAPh/3U9rKQwh7T+4oK6X4s7uP6F9qxvonew/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z9uCtcAmBDnPwAAAAAAAPh/UHeD4yo55j9uCtcAmBDnP4ydKh4F6Oc/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z/IhPh8eMrkvwAAAAAAAPh/ixnnCZqg47/IhPh8eMrkvxHKYIQUpuK/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z/sjTuu6RvxPwAAAAAAAPh/W/l4G8pM8D/sjTuu6RvxPw79YRSwAvA/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z+bWcLYo/vqvwAAAAAAAPh/E8A5hkmJ6b+bWcLYo/vqv3I0nUH7yei/","dtype":"float64","shape":[6]},{"__ndarray__":"bgrXAJgQ5z/5X2P3GITsPwAAAAAAAPh/uRE0QkHP6z/5X2P3GITsP7I5eglEi+o/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b/dNKcp8ojJvwAAAAAAAPh/0PIm+lit0L/dNKcp8ojJvyRnxn48N8y/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b9b4hJLSvPlvwAAAAAAAPh/eXVmaLfK5r9b4hJLSvPlvz1Pvy3dG+W/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b/IhPh8eMrkvwAAAAAAAPh/bDSYQGjB5b/IhPh8eMrkv96r7+hdE+S/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b8AAAAAAAAAwAAAAAAAAPh/yA/8psEk/78AAAAAAAAAwNIu4poo6P6/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b+bWcLYo/vqvwAAAAAAAPh/je1mGlP+6r+bWcLYo/vqv0fAW7F8b+m/","dtype":"float64","shape":[6]},{"__ndarray__":"W+ISS0rz5b/5X2P3GITsPwAAAAAAAPh/MCnRzUrn6j/5X2P3GITsPwi5XjOQUeo/","dtype":"float64","shape":[6]},{"__ndarray__":"yIT4fHjK5L8AAAAAAAAAwAAAAAAAAPh/PYEuWsfu/r8AAAAAAAAAwIXDdqT6Dv+/","dtype":"float64","shape":[6]},{"__ndarray__":"yIT4fHjK5L+bWcLYo/vqvwAAAAAAAPh/voWQtKz56L+bWcLYo/vqv3JNXyyYMuq/","dtype":"float64","shape":[6]},{"__ndarray__":"7I07rukb8T+Q8gg1NELwPwAAAAAAAPh/u6oSfVPx8D+Q8gg1NELwPyFrfyg4IvA/","dtype":"float64","shape":[6]},{"__ndarray__":"7I07rukb8T+4oK6X4s7uPwAAAAAAAPh/TiUwNIck8D+4oK6X4s7uP2omplyTgPA/","dtype":"float64","shape":[6]},{"__ndarray__":"7I07rukb8T9uCtcAmBDnPwAAAAAAAPh/kTNcJteu6D9uCtcAmBDnPyosijQLQ+k/","dtype":"float64","shape":[6]},{"__ndarray__":"7I07rukb8T/sjTuu6RvxPwAAAAAAAPh/XcSRHzOw8D/sjTuu6RvxP3tX5Tygh/E/","dtype":"float64","shape":[6]},{"__ndarray__":"7I07rukb8T/5X2P3GITsPwAAAAAAAPh/Fp/kTrG27j/5X2P3GITsP4u6BsDCH+4/","dtype":"float64","shape":[6]},{"__ndarray__":"ifOpZbaIuL/dNKcp8ojJvwAAAAAAAPh/uQA7N6xyw7/dNKcp8ojJv237nvx0uMm/","dtype":"float64","shape":[6]},{"__ndarray__":"ifOpZbaIuL+K/hR6VczHvwAAAAAAAPh/WvjH004iw7+K/hR6VczHv4BVIx/3xcm/","dtype":"float64","shape":[6]},{"__ndarray__":"ifOpZbaIuL/IhPh8eMrkvwAAAAAAAPh/xBV4O9mX4r/IhPh8eMrkv1ZjmdzsSeO/","dtype":"float64","shape":[6]},{"__ndarray__":"ifOpZbaIuL+bWcLYo/vqvwAAAAAAAPh/pFBFunPP6L+bWcLYo/vqv9Vo2cfNr+m/","dtype":"float64","shape":[6]},{"__ndarray__":"m1nC2KP76r/dNKcp8ojJvwAAAAAAAPh/cjDRAQok0b/dNKcp8ojJvwaxt95DMNC/","dtype":"float64","shape":[6]},{"__ndarray__":"m1nC2KP76r9b4hJLSvPlvwAAAAAAAPh/aU5uCZvw5b9b4hJLSvPlv697eXJxf+e/","dtype":"float64","shape":[6]},{"__ndarray__":"m1nC2KP76r/IhPh8eMrkvwAAAAAAAPh/pVgqoW/M5r/IhPh8eMrkv/GQWymEk+W/","dtype":"float64","shape":[6]},{"__ndarray__":"m1nC2KP76r8AAAAAAAAAwAAAAAAAAPh/eG+H2Pz7/r8AAAAAAAAAwNOlSGvt+/6/","dtype":"float64","shape":[6]},{"__ndarray__":"m1nC2KP76r+bWcLYo/vqvwAAAAAAAPh/uewV9hDT67+bWcLYo/vqv33Gbrs2JOq/","dtype":"float64","shape":[6]},{"__ndarray__":"+V9j9xiE7D+Q8gg1NELwPwAAAAAAAPh/pCwj5jqg7z+Q8gg1NELwP5UJfwMsd+4/","dtype":"float64","shape":[6]},{"__ndarray__":"+V9j9xiE7D+4oK6X4s7uPwAAAAAAAPh/f0OpNZsH7T+4oK6X4s7uP5rHWksRd+4/","dtype":"float64","shape":[6]},{"__ndarray__":"+V9j9xiE7D9uCtcAmBDnPwAAAAAAAPh/rlgGtm/F5z9uCtcAmBDnP7UwwO5sCek/","dtype":"float64","shape":[6]},{"__ndarray__":"+V9j9xiE7D/sjTuu6RvxPwAAAAAAAPh/Xu56gp0C8D/sjTuu6RvxP6Pg6ckUTvA/","dtype":"float64","shape":[6]},{"__ndarray__":"+V9j9xiE7D/5X2P3GITsPwAAAAAAAPh/28wP2qus6z/5X2P3GITsPxfzthSGW+0/","dtype":"float64","shape":[6]}]},"selected":{"id":"5336","type":"Selection"},"selection_policy":{"id":"5335","type":"UnionRenderers"}},"id":"5292","type":"ColumnDataSource"},{"attributes":{"axis_label":"x","bounds":"auto","formatter":{"id":"5287","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"5264","type":"BasicTicker"}},"id":"5263","type":"LinearAxis"},{"attributes":{"data_source":{"id":"5292","type":"ColumnDataSource"},"glyph":{"id":"5299","type":"MultiLine"},"hover_glyph":{"id":"5301","type":"MultiLine"},"muted_glyph":null,"nonselection_glyph":{"id":"5300","type":"MultiLine"},"selection_glyph":null,"view":{"id":"5303","type":"CDSView"}},"id":"5302","type":"GlyphRenderer"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_multi":null,"active_scroll":"auto","active_tap":"auto","tools":[{"id":"5253","type":"HoverTool"},{"id":"5273","type":"SaveTool"},{"id":"5274","type":"PanTool"},{"id":"5275","type":"WheelZoomTool"},{"id":"5276","type":"BoxZoomTool"},{"id":"5277","type":"ResetTool"},{"id":"5278","type":"BoxSelectTool"}]},"id":"5279","type":"Toolbar"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"value":"black"},"line_alpha":{"value":0.2},"size":{"units":"screen","value":10}},"id":"5295","type":"Circle"},{"attributes":{"data_source":{"id":"5319","type":"ColumnDataSource"},"glyph":{"id":"5322","type":"Text"},"hover_glyph":null,"muted_glyph":null,"nonselection_glyph":{"id":"5323","type":"Text"},"selection_glyph":null,"view":{"id":"5325","type":"CDSView"}},"id":"5324","type":"GlyphRenderer"},{"attributes":{},"id":"5264","type":"BasicTicker"},{"attributes":{"source":{"id":"5319","type":"ColumnDataSource"}},"id":"5325","type":"CDSView"},{"attributes":{"callback":null,"data":{"index":{"__ndarray__":"AAAAAAEAAAACAAAAAwAAAAQAAAAFAAAABgAAAAcAAAAIAAAACQAAAAoAAAALAAAA","dtype":"int32","shape":[12]},"index_hover":["1|-|R|-|Failure of the ECPU3/5 MAIN board.|-|MAIN|-|BRD_FAIL","3201|-|N|-|SYSTEM  BOOT|-|STATO|-|STATO","3201|-|R|-|SYSTEM  BOOT|-|STATO|-|STATO","41|-|N|-|Failure between the ECPU3/5 MAIN board and the NET E/XHICOM boards.|-|MAIN|-|EHNET_IF","431|-|N|-|The vital link between Normal and Reserve does not work properly.|-|EH_NR|-|NR_IF","431|-|R|-|The vital link between Normal and Reserve does not work properly.|-|EH_NR|-|NR_IF","61|-|N|-|Failure between the ECPU3/5 MAIN board and the ECPU1 board.|-|MAIN|-|NVIO_IF","61|-|R|-|Failure between the ECPU3/5 MAIN board and the ECPU1 board.|-|MAIN|-|NVIO_IF","801|-|N|-|Failure of the NET E/XHICOM board.|-|EH_NET|-|BRD_FAIL","851|-|N|-|The signal quality detected by the modem is outside the expected tolerances.|-|EH_NET|-|CH_QU_S","881|-|N|-|Failure in non vital link between the NET E/XHICOM boards.|-|EH_NET|-|NR_IF","881|-|R|-|Failure in non vital link between the NET E/XHICOM boards.|-|EH_NET|-|NR_IF"]},"selected":{"id":"5338","type":"Selection"},"selection_policy":{"id":"5337","type":"UnionRenderers"}},"id":"5291","type":"ColumnDataSource"},{"attributes":{"grid_line_color":null,"ticker":{"id":"5264","type":"BasicTicker"}},"id":"5267","type":"Grid"},{"attributes":{},"id":"5331","type":"UnionRenderers"},{"attributes":{"edge_renderer":{"id":"5302","type":"GlyphRenderer"},"inspection_policy":{"id":"5315","type":"NodesAndLinkedEdges"},"layout_provider":{"id":"5293","type":"StaticLayoutProvider"},"node_renderer":{"id":"5297","type":"GlyphRenderer"},"selection_policy":{"id":"5313","type":"NodesAndLinkedEdges"}},"id":"5304","type":"GraphRenderer"},{"attributes":{"axis_label":"y","bounds":"auto","formatter":{"id":"5289","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","ticker":{"id":"5269","type":"BasicTicker"}},"id":"5268","type":"LinearAxis"},{"attributes":{"dimension":1,"grid_line_color":null,"ticker":{"id":"5269","type":"BasicTicker"}},"id":"5272","type":"Grid"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"5333","type":"BoxAnnotation"}],"root_ids":["5254"]},"title":"Bokeh Application","version":"1.2.0"}};
+  var render_items = [{"docid":"59c16f2e-199d-468a-ae6f-ce15880f3783","roots":{"5254":"08aa22f4-faf0-4a85-ae62-06765d46b921"}}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        embed_document(root);
+        clearInterval(timer);
+      }
+      attempts++;
+      if (attempts > 100) {
+        console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing");
+        clearInterval(timer);
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
