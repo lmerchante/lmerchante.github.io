@@ -5,13 +5,6 @@
 	<body>
 
 <pre>		
-Slide 40
-
-ggplot(housing, aes(x = Date, y = Home.Value)) +
-  geom_line() +  facet_wrap(~State, ncol = 10) +
-  ggtitle("Trend in housing prices per state")
-
-
 Slide 41
 
 ggplot(filter(housing, State %in% c("MA", "TX", "DC", "NY", "KY")), aes(x = Date, y = Home.Value)) +  geom_line() +  
